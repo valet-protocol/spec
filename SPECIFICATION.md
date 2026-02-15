@@ -315,7 +315,8 @@ When implemented, agents SHOULD log each request/response as a separate record:
   "service": "gmail.com",
   "method": "POST",
   "path": "/api/send",
-  "status": 200
+  "status": 200,
+  "source": "agent"
 }
 ```
 
@@ -327,6 +328,7 @@ When implemented, agents SHOULD log each request/response as a separate record:
 - **method**: HTTP method (GET, POST, etc.)
 - **path**: Request path
 - **status**: HTTP status code returned by the service
+- **source**: Who reported this record. MUST be `"agent"` for agent-reported records. Future extensions (e.g., service receipts) MAY define additional values such as `"service"` for independently verified records.
 
 ### 7.3 Storage
 
@@ -348,13 +350,17 @@ During delegation renewal, agents SHOULD:
 
 1. Retrieve all activity records for the delegation period
 2. Aggregate by service and HTTP status code
-3. Present summary to principal:
+3. Present summary to principal, distinguishing record sources when available:
 
 ```
 Activity Summary (Feb 14 08:00 - Feb 15 08:00):
 
 Total Requests: 1,523
 Success Rate: 98%
+
+By Source:
+  - Agent-reported: 1,200
+  - Service-verified: 323
 
 By Service:
   - gmail.com: 847 requests (0 errors)
@@ -376,10 +382,10 @@ By Status:
 Services MAY participate in activity verification by:
 
 1. Logging their own records of agent requests
-2. Making these records available to principals
-3. Comparing service-logged records with agent-reported records
+2. Returning a `VALET-Receipt` response header containing a URL or CID pointing to a signed activity record (see future extension: Service Receipts)
+3. Making these records available to principals for cross-verification with agent-reported records
 
-This is entirely OPTIONAL in v1.0. Service participation enables cross-verification but is not required for basic VALET operation.
+This is entirely OPTIONAL in v1.0. Service participation enables cross-verification but is not required for basic VALET operation. The `source` field in activity records (Section 7.2) is designed to distinguish agent-reported from service-verified records when service participation is available.
 
 ### 7.6 Benefits
 
@@ -584,7 +590,7 @@ This specification may be extended in future versions to support:
 - Permission scopes (hierarchical scope system)
 - Revocation lists (real-time delegation revocation)
 - Sub-delegation (agents delegating to other agents)
-- Enhanced activity tracking (service verification of agent logs)
+- Service receipts (signed, independently verifiable activity records from services)
 - Zero-knowledge proofs (privacy-preserving verification)
 
 Extensions MUST NOT break backward compatibility with v1.0.
