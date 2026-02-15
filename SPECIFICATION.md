@@ -8,7 +8,7 @@
 
 ## Abstract
 
-VALET (Verified Agent Legitimacy and Endorsement Token) is a lightweight, decentralized protocol enabling AI agents to prove delegated authority when accessing services. VALET provides cryptographic verification of agent identity and principal authorization without requiring centralized identity providers or real-time registry lookups.
+VALET (Verifiable Agent Limited-Expiry Token) is a lightweight, decentralized protocol enabling AI agents to prove delegated authority when accessing services. VALET provides cryptographic verification of agent identity and principal authorization without requiring centralized identity providers or real-time registry lookups.
 
 VALET is built on RFC 9421 (HTTP Message Signatures) and adds a delegation layer for agent authorization.
 
