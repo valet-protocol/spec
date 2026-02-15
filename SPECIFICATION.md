@@ -1,7 +1,7 @@
 # VALET Protocol Specification v1.0
 
 **Status:** Draft  
-**Date:** February 14, 2026  
+**Date:** February 15, 2026  
 **Editors:** Subcent
 
 ---
@@ -29,7 +29,7 @@ Existing authentication systems (OAuth, API keys, service accounts) were designe
 
 - **Decentralized**: No single point of failure or control
 - **Lightweight**: Minimal overhead per request
-- **Verifiable**: All delegations cryptographically signed
+- **Verifiable**: All delegations cryptographically signed and publicly recorded
 - **Standards-based**: Built on RFC 9421 HTTP Message Signatures
 - **Human oversight**: Regular renewal enforces principal review
 
@@ -37,16 +37,17 @@ Existing authentication systems (OAuth, API keys, service accounts) were designe
 
 This specification defines:
 - Agent identity representation
-- Delegation structure
+- Delegation structure and public recordkeeping
 - HTTP headers for agent requests (using RFC 9421)
 - Signature construction and verification
 - Expiry and renewal model
+- Recommended activity tracking format
 
 This specification does NOT define:
-- Activity tracking (future extension)
-- Violation reporting (future extension)
-- Permission scopes (service-defined)
+- Specific storage implementations (IPFS, blockchain, etc.)
+- Permission scopes (future extension)
 - Revocation mechanisms (future extension)
+- Sub-delegation (future extension)
 
 ---
 
@@ -57,7 +58,6 @@ VALET builds on the following standards:
 - **RFC 9421**: HTTP Message Signatures - used for signing HTTP requests
 - **RFC 8941**: Structured Field Values for HTTP
 - **RFC 3986**: Uniform Resource Identifier (URI): Generic Syntax
-- **IPFS**: InterPlanetary File System - used for delegation storage
 
 Implementations MUST support RFC 9421 for signature generation and verification.
 
@@ -86,9 +86,15 @@ agent:ed25519:5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty
 
 Principals are identified by their public keys using the same format as agents. The principal is the human or organization delegating authority to the agent.
 
+The principal_id field contains the principal's public key, enabling cryptographic verification without external lookups.
+
 ### 3.3 Delegation
 
-A delegation is a cryptographic statement by a principal authorizing an agent to act on their behalf for a limited time period. Delegations are stored as JSON objects on IPFS.
+A delegation is a cryptographic statement by a principal authorizing an agent to act on their behalf for a limited time period. Delegations are stored at publicly accessible URLs to enable verification.
+
+### 3.4 Public Record
+
+Delegations MUST be stored at a publicly accessible URL to enable non-repudiation and verification. This prevents agents from fabricating delegations and provides an immutable record of authorization.
 
 ---
 
@@ -112,7 +118,7 @@ Delegations MUST contain exactly five fields:
 The agent's identity as derived from its public key.
 
 **principal_id** (string, required)  
-The principal's public key identifier.
+The principal's public key identifier. This field contains the principal's actual public key, enabling services to verify the delegation signature without external lookups.
 
 **issued_at** (ISO 8601 timestamp, required)  
 When this delegation was created.
@@ -135,26 +141,49 @@ Principals MAY create delegations longer than 24 hours at their own risk. Servic
 
 ### 4.3 Storage
 
-Delegations MUST be stored as JSON on IPFS. The IPFS hash (Content IDentifier, CID) of the delegation is used in HTTP headers.
+Delegations MUST be stored at a publicly accessible URL. The storage mechanism is implementation-defined and MAY include:
+
+- IPFS (Content-addressed storage)
+- Blockchain-based systems
+- Arweave (Permanent storage)
+- Traditional web servers with appropriate availability guarantees
+
+The URL scheme determines the storage type:
+- `ipfs://QmYwAPJzv5...` - IPFS storage
+- `https://example.com/delegations/123` - HTTPS-accessible storage
+- `ar://arweave-tx-id` - Arweave storage
+
+Services MUST be able to fetch delegations via standard HTTP(S) or IPFS gateway URLs.
 
 ---
 
 ## 5. HTTP Headers
 
-VALET uses RFC 9421 (HTTP Message Signatures) with a specific signature label and required components.
+VALET uses RFC 9421 (HTTP Message Signatures) with specific headers and signature parameters.
 
 ### 5.1 Required Headers
 
-**VALET-Delegation**  
-IPFS CID of the delegation JSON.
+**VALET-Authorization**  
+Base64-encoded delegation JSON.
 ```
-VALET-Delegation: QmYwAPJzv5CZsnA636s8Bv...
+VALET-Authorization: eyJhZ2VudF9pZCI6ImFnZW50OmVkMjU1MTk6NUZIbmVXNDZ4R1hnczVt...
+```
+
+**VALET-Agent**  
+URL to the publicly accessible delegation record.
+```
+VALET-Agent: record=https://ipfs.io/ipfs/QmYwAPJzv5CZsnA636s8Bv...
+```
+
+Or with IPFS protocol:
+```
+VALET-Agent: record=ipfs://QmYwAPJzv5CZsnA636s8Bv...
 ```
 
 **Signature-Input** (from RFC 9421)  
-Signature metadata using the label `valet`. MUST include the `valet-delegation` component.
+Signature metadata using the label `valet`. MUST include the `valet-authorization` component and version parameter.
 ```
-Signature-Input: valet=("@method" "@path" "valet-delegation");created=1618884479;keyid="agent:ed25519:5FHn...";alg="ed25519"
+Signature-Input: valet=("@method" "@path" "valet-authorization");created=1618884479;keyid="agent:ed25519:5FHn...";alg="ed25519";v="1.0"
 ```
 
 **Signature** (from RFC 9421)  
@@ -171,18 +200,19 @@ Agents MUST sign requests according to RFC 9421 with the following requirements:
 2. **Required covered components**:
    - `@method` - HTTP method
    - `@path` - Request path
-   - `valet-delegation` - The VALET-Delegation header value
+   - `valet-authorization` - The VALET-Authorization header value
 3. **Required signature parameters**:
    - `created` - UNIX timestamp when signature was created
    - `keyid` - Agent's public key identifier (the agent_id)
    - `alg` - Signature algorithm (e.g., "ed25519")
+   - `v` - Protocol version (e.g., "1.0")
 
 **Example signature base construction** (per RFC 9421):
 ```
 "@method": POST
 "@path": /api/send-email
-"valet-delegation": QmYwAPJzv5CZsnA636s8Bv...
-"@signature-params": ("@method" "@path" "valet-delegation");created=1618884479;keyid="agent:ed25519:5FHn...";alg="ed25519"
+"valet-authorization": eyJhZ2VudF9pZCI6ImFnZW50...
+"@signature-params": ("@method" "@path" "valet-authorization");created=1618884479;keyid="agent:ed25519:5FHn...";alg="ed25519";v="1.0"
 ```
 
 The agent signs this signature base with its private key to produce the signature value.
@@ -201,8 +231,9 @@ Services MAY require specific additional components.
 Since RFC 9421 supports multiple signatures, a request MAY contain both VALET signatures and other RFC 9421 signatures:
 
 ```
-VALET-Delegation: QmYwAPJzv5CZsnA636s8Bv...
-Signature-Input: valet=("@method" "@path" "valet-delegation");created=1618884479;keyid="agent:ed25519:5FHn...";alg="ed25519", othersig=("@method" "@authority");created=1618884480;keyid="other-key"
+VALET-Authorization: eyJhZ2VudF9pZCI6ImFnZW50...
+VALET-Agent: record=ipfs://QmYwAPJzv5CZsnA636s8Bv...
+Signature-Input: valet=("@method" "@path" "valet-authorization");created=1618884479;keyid="agent:ed25519:5FHn...";alg="ed25519";v="1.0", othersig=("@method" "@authority");created=1618884480;keyid="other-key"
 Signature: valet=:base64_sig1...:, othersig=:base64_sig2...:
 ```
 
@@ -219,45 +250,160 @@ Services verify VALET requests as follows:
 1. Look for signature with label `valet` in `Signature-Input` and `Signature` headers
 2. If not present, request is not VALET-authenticated
 3. Extract signature components and parameters per RFC 9421
+4. Extract version from `v` parameter
 
-### 6.2 Verify Agent Signature (RFC 9421)
+### 6.2 Decode and Fetch Delegation
+
+1. Decode `VALET-Authorization` header to get delegation JSON
+2. Extract URL from `VALET-Agent` header (`record=<url>`)
+3. Fetch delegation from the public URL
+4. Verify fetched delegation matches decoded delegation from header
+5. REJECT if they don't match (agent is lying about delegation)
+
+### 6.3 Verify Principal Signature
+
+1. Extract `principal_id` from delegation (this is the principal's public key)
+2. Verify `delegation_signature` was created by signing `agent_id || issued_at || expires_at` with the principal's private key
+3. REJECT if signature is invalid
+
+### 6.4 Verify Delegation Expiry
+
+1. Get current timestamp
+2. Verify `issued_at <= current_time < expires_at`
+3. REJECT if delegation has expired
+
+### 6.5 Verify Agent Signature (RFC 9421)
 
 1. Extract agent's public key from `keyid` parameter (this is the agent_id)
 2. Reconstruct signature base per RFC 9421 using covered components
 3. Verify signature using agent's public key
 4. REJECT if signature is invalid
 
-### 6.3 Verify Delegation
-
-1. Extract IPFS CID from `VALET-Delegation` header
-2. Fetch delegation JSON from IPFS
-3. Verify delegation contains required fields
-4. Extract `principal_id` from delegation
-5. Verify `delegation_signature` using principal's public key
-6. Verify delegation has not expired (`current_time < expires_at`)
-7. REJECT if any verification fails
-
-### 6.4 Verify Principal Authorization
+### 6.6 Verify Principal Authorization
 
 Services MUST verify that the principal is authorized to access the service:
-1. Check if `principal_id` corresponds to a known user/account
+1. Check if `principal_id` corresponds to a known user/account (service-specific)
 2. Apply service-specific authorization policies
 3. REJECT if principal is not authorized
 
 Services define their own authorization logic based on principal identity.
 
-### 6.5 Verification Result
+### 6.7 Verification Result
 
 If all checks pass, the request is authenticated as:
 - Coming from the specified agent
 - Authorized by the specified principal
 - Within the delegation validity period
+- With a publicly verifiable delegation record
 
 ---
 
-## 7. Complete Request Example
+## 7. Activity Tracking (Recommended)
 
-### 7.1 Delegation Creation
+### 7.1 Purpose
+
+To enable principal oversight during delegation renewal, agents SHOULD maintain activity records of their interactions with services. This allows principals to make informed decisions about whether to renew agent delegations based on actual behavior.
+
+### 7.2 Activity Record Format
+
+When implemented, agents SHOULD log each request/response as a separate record:
+
+```json
+{
+  "agent_id": "agent:ed25519:5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+  "timestamp": "2026-02-14T14:23:00Z",
+  "service": "gmail.com",
+  "method": "POST",
+  "path": "/api/send",
+  "status": 200
+}
+```
+
+**Field Definitions:**
+
+- **agent_id**: The agent's identifier
+- **timestamp**: When the request was made (ISO 8601)
+- **service**: The service domain/hostname
+- **method**: HTTP method (GET, POST, etc.)
+- **path**: Request path
+- **status**: HTTP status code returned by the service
+
+### 7.3 Storage
+
+Activity record storage is implementation-defined. Agents MAY use:
+- IPFS (content-addressed, distributed)
+- Cloud storage (S3, GCS, Azure Blob Storage)
+- Blockchain-based storage
+- Local databases
+- Any other mechanism that allows retrieval
+
+The storage mechanism SHOULD provide:
+- Integrity (records cannot be tampered with)
+- Availability (records can be retrieved when needed)
+- Auditability (third parties can verify if needed)
+
+### 7.4 Aggregation and Presentation
+
+During delegation renewal, agents SHOULD:
+
+1. Retrieve all activity records for the delegation period
+2. Aggregate by service and HTTP status code
+3. Present summary to principal:
+
+```
+Activity Summary (Feb 14 08:00 - Feb 15 08:00):
+
+Total Requests: 1,523
+Success Rate: 98%
+
+By Service:
+  - gmail.com: 847 requests (0 errors)
+  - calendar.google.com: 676 requests (31 errors)
+
+By Status:
+  - 2xx (Success): 1,489
+  - 4xx (Client Error): 3
+    - 429 (Rate Limited): 2
+    - 403 (Forbidden): 1
+  - 5xx (Server Error): 31
+    - 500 (Internal Server Error): 31
+```
+
+4. Provide access to detailed records if principal requests
+
+### 7.5 Service Participation (Optional)
+
+Services MAY participate in activity verification by:
+
+1. Logging their own records of agent requests
+2. Making these records available to principals
+3. Comparing service-logged records with agent-reported records
+
+This is entirely OPTIONAL in v1.0. Service participation enables cross-verification but is not required for basic VALET operation.
+
+### 7.6 Benefits
+
+Activity tracking provides:
+- **Transparency**: Principals see what their agents actually do
+- **Accountability**: Agents cannot hide misbehavior
+- **Informed Decisions**: Renewal decisions based on real data, not blind trust
+- **Debugging**: Helps identify issues with agent behavior
+- **Audit Trail**: Historical record of agent actions
+
+### 7.7 Privacy Considerations
+
+Activity records contain only metadata (service, status, timestamp), not request/response content. This provides oversight without exposing sensitive data.
+
+Principals should consider:
+- How long to retain activity records
+- Who has access to activity records
+- Whether to share activity records with third parties
+
+---
+
+## 8. Complete Request Example
+
+### 8.1 Delegation Creation
 
 Principal creates delegation:
 
@@ -271,37 +417,40 @@ Principal creates delegation:
 }
 ```
 
-Stores to IPFS → receives CID: `QmYwAPJzv5CZsnA636s8Bv...`
+Stores to public location → receives URL: `https://ipfs.io/ipfs/QmYwAPJzv5CZsnA636s8Bv...`
 
-### 7.2 Agent Request
+### 8.2 Agent Request
 
 ```http
 POST /api/send-email HTTP/1.1
 Host: mail.example.com
 Content-Type: application/json
-VALET-Delegation: QmYwAPJzv5CZsnA636s8Bv...
-Signature-Input: valet=("@method" "@path" "valet-delegation");created=1708077600;keyid="agent:ed25519:5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";alg="ed25519"
+VALET-Authorization: eyJhZ2VudF9pZCI6ImFnZW50OmVkMjU1MTk6NUZIbmVXNDZ4R1hnczVtVWl2ZVVUU2JUeUdCem1zdFVzcFpDOTJVaGpKTTY5NHR5IiwicHJpbmNpcGFsX2lkIjoiZWQyNTUxOTpBQkMxMjMuLi4iLCJpc3N1ZWRfYXQiOiIyMDI2LTAyLTE0VDA4OjAwOjAwWiIsImV4cGlyZXNfYXQiOiIyMDI2LTAyLTE1VDA4OjAwOjAwWiIsImRlbGVnYXRpb25fc2lnbmF0dXJlIjoiaUtxTG04Tm9QcS4uLiJ9
+VALET-Agent: record=https://ipfs.io/ipfs/QmYwAPJzv5CZsnA636s8Bv...
+Signature-Input: valet=("@method" "@path" "valet-authorization");created=1708077600;keyid="agent:ed25519:5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";alg="ed25519";v="1.0"
 Signature: valet=:MEUCIQDxK7VQX8ZqkYT9jXMZ0ST+CZEfN+rT8gdVSFqH3CkPJgIgLbHDh2ERCVfK7hZP0nX4azAFGKm8jRtJfHDqC3Ef4wA=:
 
 {"to":"user@example.com","subject":"Hello","body":"..."}
 ```
 
-### 7.3 Service Verification
+### 8.3 Service Verification
 
 1. Extract `valet` signature from headers ✓
-2. Verify agent signature per RFC 9421 ✓
-3. Fetch delegation from IPFS using CID ✓
-4. Verify principal signature on delegation ✓
-5. Check delegation not expired ✓
-6. Verify principal authorized ✓
+2. Decode VALET-Authorization header ✓
+3. Fetch delegation from public URL ✓
+4. Verify fetched matches decoded ✓
+5. Verify principal signature on delegation ✓
+6. Check delegation not expired ✓
+7. Verify agent signature per RFC 9421 ✓
+8. Verify principal authorized ✓
 
 Request accepted.
 
 ---
 
-## 8. Security Considerations
+## 9. Security Considerations
 
-### 8.1 Key Management
+### 9.1 Key Management
 
 **Agents:**
 - Private keys MUST be stored securely
@@ -312,22 +461,22 @@ Request accepted.
 - SHOULD use hardware wallets or secure key storage
 - SHOULD regularly review active delegations
 
-### 8.2 Timestamp Validation
+### 9.2 Timestamp Validation
 
 Services verifying signatures SHOULD check that the `created` timestamp in the signature parameters is recent (within acceptable window, e.g., ±5 minutes) to prevent replay attacks.
 
-### 8.3 Delegation Expiry
+### 9.3 Delegation Expiry
 
 Services MUST check delegation expiry. Expired delegations MUST be rejected even if the signature is valid.
 
-### 8.4 IPFS Availability
+### 9.4 Public Record Availability
 
-Services SHOULD handle IPFS unavailability gracefully:
-- Use IPFS gateway redundancy
+Services SHOULD handle public record unavailability gracefully:
+- Use multiple retrieval methods (IPFS gateways, direct HTTPS)
 - Cache recently fetched delegations (respecting expiry)
 - Define fail-open vs fail-closed policies
 
-### 8.5 Signature Algorithms
+### 9.5 Signature Algorithms
 
 Services MUST validate that the signature algorithm (`alg` parameter) is acceptable for their security requirements. Recommended algorithms:
 - `ed25519` (EdDSA using Curve edwards25519)
@@ -335,65 +484,83 @@ Services MUST validate that the signature algorithm (`alg` parameter) is accepta
 
 Refer to RFC 9421 Section 3.3 for algorithm specifications.
 
+### 9.6 Public Record Integrity
+
+The public record provides non-repudiation. Services MUST verify:
+- The record at the URL matches the header delegation
+- The URL uses a trusted storage mechanism
+- The record has not been tampered with (via content addressing or signatures)
+
+Without public record verification, agents could fabricate delegations.
+
 ---
 
-## 9. Implementation Guidelines
+## 10. Implementation Guidelines
 
-### 9.1 Agent Implementation
+### 10.1 Agent Implementation
 
 Agents need:
 - Ed25519 key generation and signing
-- IPFS client (lightweight gateway-based)
-- RFC 9421 signature implementation
-- HTTP header construction
+- HTTP client with RFC 9421 signature support
+- Public storage client (IPFS gateway, HTTPS, etc.)
+- Delegation management
+- (Optional) Activity logging system
 
 **Estimated implementation:** ~300 lines of code using existing RFC 9421 libraries.
 
-### 9.2 Service Implementation  
+### 10.2 Service Implementation  
 
 Services need:
 - RFC 9421 signature verification library
-- IPFS client or gateway access
-- Principal-to-account mapping
+- HTTP client for fetching public records
+- Principal-to-account mapping (service-specific)
 
 **Estimated implementation:** ~200 lines of code using existing RFC 9421 libraries.
 
-### 9.3 Principal Implementation
+### 10.3 Principal Implementation
 
 Principals need:
-- IPFS node or hosted IPFS service
+- Public storage access (IPFS node, web server, or hosted service)
 - Key management for signing delegations
 - Renewal workflow (manual or automated)
+- (Optional) Activity record review interface
 
 ---
 
-## 10. IANA Considerations
+## 11. IANA Considerations
 
-### 10.1 HTTP Header Registration
+### 11.1 HTTP Header Registration
 
-The following HTTP header should be registered:
+The following HTTP headers should be registered:
 
-**VALET-Delegation**
-- Header field name: VALET-Delegation
+**VALET-Authorization**
+- Header field name: VALET-Authorization
 - Applicable protocol: HTTP
 - Status: Standard
 - Author/Change controller: IETF
 - Specification document: this document
 
-### 10.2 RFC 9421 Component Registry
+**VALET-Agent**
+- Header field name: VALET-Agent
+- Applicable protocol: HTTP
+- Status: Standard
+- Author/Change controller: IETF
+- Specification document: this document
+
+### 11.2 RFC 9421 Component Registry
 
 The following component identifier should be registered in the "HTTP Signature Derived Component Names" registry:
 
-**valet-delegation**
-- Component Name: valet-delegation
-- Description: IPFS CID of agent delegation
+**valet-authorization**
+- Component Name: valet-authorization
+- Description: Base64-encoded agent delegation
 - Reference: this document
 
 ---
 
-## 11. References
+## 12. References
 
-### 11.1 Normative References
+### 12.1 Normative References
 
 **[RFC2119]** Bradner, S., "Key words for use in RFCs to Indicate Requirement Levels", BCP 14, RFC 2119, March 1997.
 
@@ -403,7 +570,7 @@ The following component identifier should be registered in the "HTTP Signature D
 
 **[RFC3986]** Berners-Lee, T., Fielding, R., Masinter, L., "Uniform Resource Identifier (URI): Generic Syntax", RFC 3986, January 2005.
 
-### 11.2 Informative References
+### 12.2 Informative References
 
 **[IPFS]** "InterPlanetary File System", https://docs.ipfs.tech
 
@@ -411,14 +578,14 @@ The following component identifier should be registered in the "HTTP Signature D
 
 ---
 
-## 12. Future Extensions
+## 13. Future Extensions
 
 This specification may be extended in future versions to support:
-- Activity record tracking
-- Violation reporting
-- Revocation lists
-- Permission scopes
-- Sub-delegation
+- Permission scopes (hierarchical scope system)
+- Revocation lists (real-time delegation revocation)
+- Sub-delegation (agents delegating to other agents)
+- Enhanced activity tracking (service verification of agent logs)
+- Zero-knowledge proofs (privacy-preserving verification)
 
 Extensions MUST NOT break backward compatibility with v1.0.
 
